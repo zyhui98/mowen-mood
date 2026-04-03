@@ -1,0 +1,267 @@
+@import "tailwindcss";
+
+/* ===== 基础样式 ===== */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== 自定义滚动条 ===== */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ===== 动画关键帧 ===== */
+
+/* 淡入动画 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+/* ===== 暴风雪效果 - 雪花下落 ===== */
+@keyframes snowfall {
+  0% {
+    transform: translateY(-10px) translateX(0) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.8;
+  }
+  90% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(250px) translateX(30px) rotate(360deg);
+    opacity: 0;
+  }
+}
+
+.snowflake {
+  animation: snowfall 5s linear infinite;
+  will-change: transform, opacity;
+}
+
+/* ===== 下雨效果 - 雨滴下落 ===== */
+@keyframes rainfall {
+  0% {
+    transform: translateY(-20px) translateX(-5px) scaleY(1);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.7;
+  }
+  90% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(280px) translateX(-15px) scaleY(1.2);
+    opacity: 0;
+  }
+}
+
+.raindrop {
+  animation: rainfall 0.7s linear infinite;
+  will-change: transform, opacity;
+}
+
+/* ===== 多云效果 - 云朵漂移 ===== */
+@keyframes cloud-drift-1 {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(30px);
+  }
+}
+
+@keyframes cloud-drift-2 {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-25px);
+  }
+}
+
+@keyframes cloud-drift-3 {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(20px);
+  }
+}
+
+.cloud-1 {
+  top: 20px;
+  left: 20px;
+  animation: cloud-drift-1 15s ease-in-out infinite;
+  will-change: transform;
+}
+
+.cloud-2 {
+  top: 60px;
+  right: 30px;
+  animation: cloud-drift-2 18s ease-in-out infinite;
+  will-change: transform;
+}
+
+.cloud-3 {
+  top: 100px;
+  left: 60px;
+  animation: cloud-drift-3 12s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* ===== 晴天效果 - 太阳光芒旋转 ===== */
+@keyframes sun-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sun-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+.sun {
+  animation: sun-pulse 4s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.sun-rays {
+  animation: sun-rotate 30s linear infinite;
+  will-change: transform;
+}
+
+/* ===== 烈日效果 - 热浪脉冲 ===== */
+@keyframes heatwave-pulse-1 {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.1;
+  }
+}
+
+@keyframes heatwave-pulse-2 {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.2;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.05;
+  }
+}
+
+@keyframes heatwave-pulse-3 {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+.heatwave-1 {
+  animation: heatwave-pulse-1 2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.heatwave-2 {
+  animation: heatwave-pulse-2 2.5s ease-in-out infinite 0.3s;
+  will-change: transform, opacity;
+}
+
+.heatwave-3 {
+  animation: heatwave-pulse-3 3s ease-in-out infinite 0.6s;
+  will-change: transform, opacity;
+}
+
+/* 热浪扭曲效果（轻微） */
+@keyframes heat-distort {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.heat-distortion {
+  background: linear-gradient(
+    45deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.05) 45%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.05) 55%,
+    transparent 60%
+  );
+  background-size: 200% 200%;
+  animation: heat-distort 3s ease-in-out infinite;
+  will-change: background-position;
+}
+
+/* ===== 工具类 ===== */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ===== 过渡动画优化 ===== */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+}
