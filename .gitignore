@@ -38,4 +38,4 @@ temp/
 .venv/
 target/
 *.db
-backup/__pycache__
+__pycache__
