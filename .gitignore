@@ -13,6 +13,7 @@ build/
 # Logs
 logs/
 *.log
+*.pid
 npm-debug.log*
 
 # Environment files
