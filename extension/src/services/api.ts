@@ -1,6 +1,6 @@
 import type { ApiResponse, Note, TrendPoint, MoodAnalysisResult } from '../types'
 
-const API_BASE = 'http://127.0.0.1:5001/api'
+const API_BASE = import.meta.env.VITE_API_BASE
 
 /**
  * 统一请求处理函数

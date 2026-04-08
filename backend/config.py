@@ -61,7 +61,7 @@ class Config:
         # Flask 配置
         self.DEBUG = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
         self.HOST = os.environ.get('FLASK_HOST', '0.0.0.0')
-        self.PORT = int(os.environ.get('FLASK_PORT', 5001))
+        self.PORT = int(os.environ.get('FLASK_PORT', 15001))
 
 
 # 全局配置实例
