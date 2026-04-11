@@ -3,7 +3,7 @@ Flask 应用入口
 墨问心情分析后端服务
 """
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from datetime import datetime
 
@@ -26,6 +26,15 @@ CORS(app, resources={
 
 # 注册 API 路由蓝图
 app.register_blueprint(api_bp)
+
+
+@app.route('/privacy')
+def privacy():
+    """
+    隐私政策页面
+    用于 Chrome Web Store 审核
+    """
+    return send_from_directory('static', 'privacy.html')
 
 
 @app.route('/api/health', methods=['GET'])
