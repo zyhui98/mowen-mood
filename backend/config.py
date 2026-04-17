@@ -52,10 +52,19 @@ class Config:
         # 加载 .env 配置
         env_config = load_env_config()
         
-        # API 配置
+        # OpenAI 兼容 API 配置（阿里云等）
         self.API_KEY = env_config.get('API_KEY', '')
         self.API_URL = env_config.get('API_URL', '')
         self.API_LLM = env_config.get('API_LLM', '')
+        
+        # 智谱 API 配置
+        self.ZHIPU_KEY = env_config.get('ZHIPU_KEY', '')
+        self.ZHIPU_LLM = env_config.get('ZHIPU_LLM', '')
+        
+        # LLM 提供商选择：openai | zhipuai
+        self.LLM_PROVIDER = env_config.get('LLM_PROVIDER', 'openai').lower()
+        
+        # 墨问笔记 Cookie
         self.COOKIE = env_config.get('COOKIE', '')
         
         # Flask 配置
@@ -75,6 +84,9 @@ def get_config() -> dict:
         'api_key': config.API_KEY,
         'api_url': config.API_URL,
         'api_llm': config.API_LLM,
+        'zhipu_key': config.ZHIPU_KEY,
+        'zhipu_llm': config.ZHIPU_LLM,
+        'llm_provider': config.LLM_PROVIDER,
         'debug': config.DEBUG,
         'host': config.HOST,
         'port': config.PORT,

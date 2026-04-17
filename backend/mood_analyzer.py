@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 心情分析模块
-使用阿里云 Qwen 大模型分析笔记中的心情状态
+支持多种大模型：OpenAI 兼容 API（阿里云等）和智谱 API
 """
 
 import json
 import logging
 from typing import Optional
 from datetime import datetime, timezone, timedelta
-from openai import OpenAI
 
 from config import get_config
 from database import save_note, save_mood_record
@@ -70,26 +69,49 @@ class MoodAnalyzer:
         """初始化，从 config 加载 API 配置"""
         config = get_config()
         
-        self.api_key = config['api_key']
-        self.api_url = config['api_url']
-        self.model = config['api_llm']
+        # 获取 LLM 提供商配置
+        self.provider = config.get('llm_provider', 'openai').lower()
         
-        # 验证配置
-        if not self.api_key:
-            raise ValueError("API Key 未配置，请检查 .env 文件中的 api.key")
-        if not self.api_url:
-            raise ValueError("API URL 未配置，请检查 .env 文件中的 api.url")
-        if not self.model:
-            raise ValueError("模型名称未配置，请检查 .env 文件中的 api.llm")
-        
-        # 初始化 OpenAI 客户端
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.api_url,
-            timeout=self.REQUEST_TIMEOUT
-        )
-        
-        logger.info(f"MoodAnalyzer 初始化完成，使用模型: {self.model}")
+        if self.provider == 'zhipuai':
+            # 智谱 API
+            self.api_key = config.get('zhipu_key', '')
+            self.model = config.get('zhipu_llm', '')
+            
+            if not self.api_key:
+                raise ValueError("智谱 API Key 未配置，请检查 .env 文件中的 zhipu.key")
+            if not self.model:
+                raise ValueError("智谱模型名称未配置，请检查 .env 文件中的 zhipu.llm")
+            
+            # 导入并初始化智谱客户端
+            from zhipuai import ZhipuAI
+            self.client = ZhipuAI(
+                api_key=self.api_key,
+                timeout=self.REQUEST_TIMEOUT
+            )
+            logger.info(f"MoodAnalyzer 初始化完成，使用智谱 API, 模型: {self.model}")
+            
+        else:
+            # OpenAI 兼容 API（默认）
+            from openai import OpenAI
+            
+            self.api_key = config.get('api_key', '')
+            self.api_url = config.get('api_url', '')
+            self.model = config.get('api_llm', '')
+            
+            if not self.api_key:
+                raise ValueError("API Key 未配置，请检查 .env 文件中的 api.key")
+            if not self.api_url:
+                raise ValueError("API URL 未配置，请检查 .env 文件中的 api.url")
+            if not self.model:
+                raise ValueError("模型名称未配置，请检查 .env 文件中的 api.llm")
+            
+            # 初始化 OpenAI 客户端
+            self.client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.api_url,
+                timeout=self.REQUEST_TIMEOUT
+            )
+            logger.info(f"MoodAnalyzer 初始化完成，使用 OpenAI 兼容 API, 模型: {self.model}")
     
     def analyze_mood(self, text: str) -> dict:
         """
@@ -162,21 +184,45 @@ class MoodAnalyzer:
                 {"role": "user", "content": text}
             ]
         }
-        logger.info(f"LLM 请求参数: {request_params}")
+        logger.info(f"LLM 请求参数 (provider={self.provider}): {request_params}")
         
         # 记录开始时间
         start_time = time.time()
         logger.info("开始调用 LLM API...")
         
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.9,  # 较低温度以获得更稳定的输出
-            max_tokens=200  # 只需要返回简单 JSON，200 足够
-        )
+        # 根据提供商调用不同的 API
+        if self.provider == 'zhipuai':
+            # 智谱 API - 不使用流式输出和思考模式
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7,
+                max_tokens=1024,
+                top_p=0.9,
+                stream=False,  # 禁用流式输出
+                thinking={
+                    "type": "disabled",
+                },
+            )
+        else:
+            # OpenAI 兼容 API - 不使用流式输出，禁止思考
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.7,
+                max_tokens=1024,
+                top_p=0.9,
+                stream=False,  # 禁用流式输出
+                extra_body={
+                    "enable_thinking": False  # 2. 尝试禁用模型思考过程 (针对支持该参数的模型)
+                }
+            )
         
         # 计算耗时
         elapsed_time = time.time() - start_time
@@ -184,7 +230,7 @@ class MoodAnalyzer:
         
         # 提取响应内容
         content = response.choices[0].message.content.strip()
-        logger.info(f"LLM 原始响应内容:\n{content}")
+        logger.info(f"LLM 原始响应内容:\n{response}")
         
         # 解析 JSON
         result = self._parse_response(content)

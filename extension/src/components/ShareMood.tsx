@@ -139,7 +139,7 @@ function ShareMood({ onAnalyze, isDetailPage, isLoading, result }: ShareMoodProp
           }
         `}
       >
-        {isLoading ? <LoadingSpinner /> : '共享当前笔记'}
+        {isLoading ? <LoadingSpinner /> : '共享笔记心情'}
       </button>
 
       {/* 分析结果 */}

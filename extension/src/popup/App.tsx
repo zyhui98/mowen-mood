@@ -154,9 +154,15 @@ function App() {
       // 检查是否在墨问笔记详情页
       const match = tab.url.match(/note\.mowen\.cn\/detail\/([^\/]+)/)
       if (match) {
+        const newUuid = match[1]
         setIsDetailPage(true)
-        setCurrentNoteUuid(match[1])
-        console.log('[检测页面] 检测到笔记详情, UUID:', match[1])
+        setCurrentNoteUuid(newUuid)
+        console.log('[检测页面] 检测到笔记详情, UUID:', newUuid)
+        
+        // 如果 UUID 变化了，清除之前的分析结果
+        if (newUuid !== currentNoteUuid) {
+          setAnalysisResult(null)
+        }
       } else {
         setIsDetailPage(false)
         setCurrentNoteUuid(null)
@@ -167,7 +173,7 @@ function App() {
       setIsDetailPage(false)
       setCurrentNoteUuid(null)
     }
-  }, [])
+  }, [currentNoteUuid])
 
   // 初始化
   useEffect(() => {
