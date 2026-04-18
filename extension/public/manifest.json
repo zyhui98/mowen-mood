@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "墨问心情",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "分析墨问笔记的心情趋势，以温度和天气可视化展示",
   "permissions": ["cookies", "sidePanel"],
   "host_permissions": ["*://note.mowen.cn/*", "https://user.mowen.cn/*", "http://127.0.0.1:15001/*", "http://124.223.183.4:15001/*", "https://mowen-mood.yuanbixue.com/*"],
