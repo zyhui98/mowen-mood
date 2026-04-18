@@ -45,6 +45,21 @@ body {
   animation: fade-in 0.3s ease-out forwards;
 }
 
+/* 心情弹幕横向滚动 */
+@keyframes mood-danmaku-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-mood-danmaku {
+  animation: mood-danmaku-marquee 24s linear infinite;
+  will-change: transform;
+}
+
 /* ===== 暴风雪效果 - 雪花下落 ===== */
 @keyframes snowfall {
   0% {

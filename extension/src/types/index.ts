@@ -41,6 +41,16 @@ export interface TrendPoint {
   note_uuid: string
 }
 
+/** 心情弹幕（最近一天内展示） */
+export interface MoodDanmaku {
+  id: number
+  content: string
+  color: string
+  emoji: string
+  author_uid: string | null
+  created_at: string
+}
+
 // 心情分析结果
 export interface MoodAnalysisResult {
   is_mood_related: boolean
@@ -59,7 +69,7 @@ export interface ApiResponse<T> {
 
 // 插件消息类型（用于 background 和 popup 之间通信）
 export interface ExtensionMessage {
-  type: 'GET_COOKIE' | 'GET_CURRENT_NOTE' | 'ANALYZE_NOTE' | 'SYNC_NOTES' | 'FETCH_MOWEN_UID'
+  type: 'GET_COOKIE' | 'GET_CURRENT_NOTE' | 'ANALYZE_NOTE' | 'FETCH_MOWEN_UID'
   payload?: any
 }
 

@@ -123,6 +123,23 @@ def init_db() -> None:
         )
     except sqlite3.OperationalError as e:
         print(f"notes author_uid 索引警告: {e}")
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mood_danmaku (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#6366f1',
+            emoji TEXT DEFAULT '',
+            author_uid TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute(
+        'CREATE INDEX IF NOT EXISTS idx_mood_danmaku_created ON mood_danmaku(created_at)'
+    )
+    cursor.execute(
+        'CREATE INDEX IF NOT EXISTS idx_mood_danmaku_author ON mood_danmaku(author_uid)'
+    )
     
     conn.commit()
     conn.close()
@@ -404,5 +421,102 @@ def get_note_by_uuid(uuid: str) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
         
+    finally:
+        conn.close()
+
+
+def count_mood_danmaku_by_author_recent(author_uid: str, hours: int = 24) -> int:
+    """
+    某作者在 rolling 最近 hours 小时内已发布的弹幕条数（用于频控）
+    """
+    if not author_uid:
+        return 0
+    hours = max(1, min(168, hours))
+    since = f'-{hours} hours'
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            '''
+            SELECT COUNT(*) FROM mood_danmaku
+            WHERE author_uid = ?
+              AND created_at >= datetime('now', ?)
+            ''',
+            (author_uid, since),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def save_mood_danmaku(
+    content: str,
+    color: str,
+    emoji: str = '',
+    author_uid: Optional[str] = None,
+) -> bool:
+    """
+    插入一条心情弹幕
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            '''
+            INSERT INTO mood_danmaku (content, color, emoji, author_uid, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (content, color, emoji or '', author_uid, get_shanghai_time()),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"保存心情弹幕失败: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_mood_danmaku_recent(
+    hours: int = 24,
+    author_uid: Optional[str] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    最近若干小时内的弹幕，按时间正序（适合横向滚动展示）
+    """
+    hours = max(1, min(168, hours))
+    limit = max(1, min(500, limit))
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        since = f'-{hours} hours'
+        if author_uid:
+            cursor.execute(
+                '''
+                SELECT id, content, color, emoji, author_uid, created_at
+                FROM mood_danmaku
+                WHERE created_at >= datetime('now', ?)
+                  AND author_uid = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+                ''',
+                (since, author_uid, limit),
+            )
+        else:
+            cursor.execute(
+                '''
+                SELECT id, content, color, emoji, author_uid, created_at
+                FROM mood_danmaku
+                WHERE created_at >= datetime('now', ?)
+                ORDER BY created_at ASC
+                LIMIT ?
+                ''',
+                (since, limit),
+            )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
     finally:
         conn.close()

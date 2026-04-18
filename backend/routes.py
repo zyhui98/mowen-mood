@@ -4,10 +4,19 @@ REST API 路由模块
 使用 Flask Blueprint 组织所有 API 接口
 """
 
+import re
+
 from flask import Blueprint, request, jsonify
 
-from config import config
-from database import get_notes, get_mood_trend, get_note_by_uuid, get_notes_count
+from database import (
+    get_notes,
+    get_mood_trend,
+    get_note_by_uuid,
+    get_notes_count,
+    get_mood_danmaku_recent,
+    save_mood_danmaku,
+    count_mood_danmaku_by_author_recent,
+)
 from mowen_client import (
     MowenClient,
     MowenAuthError,
@@ -19,6 +28,8 @@ from mood_analyzer import get_analyzer
 
 # 创建 API 蓝图
 api_bp = Blueprint('api', __name__, url_prefix='/api')
+
+_MOOD_COLOR_HEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
 
 
 def success_response(data=None, message=None):
@@ -55,114 +66,6 @@ def error_response(message, status_code=500):
         'success': False,
         'message': message
     }), status_code
-
-
-@api_bp.route('/notes/sync', methods=['POST'])
-def sync_notes():
-    """
-    同步墨问笔记
-    拉取笔记列表 + 逐篇分析心情
-    
-    优先使用 .env 配置的 cookie，也可从请求体传入
-    响应: {"success": true, "data": {"total": 20, "synced": 15, "skipped": 5}}
-    """
-    try:
-        # 优先使用配置文件中的 cookie
-        cookie = config.COOKIE
-        
-        # 如果配置文件中没有，从请求体中获取
-        if not cookie:
-            data = request.get_json()
-            if data:
-                cookie = data.get('cookie')
-        
-        if not cookie:
-            return error_response('请在 .env 文件中配置 cookie 或在请求体中传入', 400)
-        
-        # 创建墨问客户端
-        client = MowenClient(cookie)
-        
-        # 获取笔记列表
-        response = client.fetch_notes()
-        notes = MowenClient.parse_notes_response(response)
-        
-        total = len(notes)
-        synced = 0
-        skipped = 0
-        
-        # 获取分析器实例
-        analyzer = get_analyzer()
-        
-        # 遍历每篇笔记
-        for idx, note in enumerate(notes):
-            note_uuid = note.get('uuid')
-            note_title = note.get('title', '')[:30] if note.get('title') else ''
-            print(f"[同步进度] 正在处理第 {idx + 1}/{total} 篇笔记, uuid={note_uuid}, title={note_title}..." )
-            if not note_uuid:
-                continue
-            
-            # 已在库中则不再拉详情、不调 LLM、不写库
-            existing = get_note_by_uuid(note_uuid)
-            if existing:
-                skipped += 1
-                print(
-                    f"[跳过] 笔记已在库中: uuid={note_uuid}, "
-                    f"mood_score={existing.get('mood_score')}"
-                )
-                continue
-            
-            try:
-                # 获取笔记详情
-                detail_response = client.fetch_note_detail(note_uuid)
-                detail = MowenClient.parse_note_detail(detail_response)
-                
-                if not detail:
-                    continue
-                
-                # 提取笔记信息
-                title = detail.get('title', '')
-                content_html = detail.get('content', '')
-                content = MowenClient.extract_text_content(content_html)
-                published_at = detail.get('publishedAt', detail.get('published_at'))
-                
-                author_uid = detail.get('uid') if detail else None
-
-                # 分析心情并保存
-                result = analyzer.analyze_and_save(
-                    note_uuid=note_uuid,
-                    title=title,
-                    content=content,
-                    published_at=published_at,
-                    author_uid=author_uid
-                )
-                
-                if result.get('success'):
-                    synced += 1
-                    
-            except Exception as e:
-                # 单篇笔记处理失败，记录日志但继续处理其他笔记
-                print(f"处理笔记 {note_uuid} 失败: {str(e)}")
-                continue
-        
-        # 关闭客户端
-        client.close()
-        
-        print(f"[同步完成] 总计: {total}, 新分析: {synced}, 已跳过: {skipped}")
-        
-        return success_response({
-            'total': total,
-            'synced': synced,
-            'skipped': skipped
-        })
-        
-    except MowenAuthError as e:
-        return error_response(str(e), 401)
-    except MowenAPIError as e:
-        return error_response(str(e), 500)
-    except ValueError as e:
-        return error_response(str(e), 400)
-    except Exception as e:
-        return error_response(f'服务器内部错误: {str(e)}', 500)
 
 
 @api_bp.route('/notes', methods=['GET'])
@@ -266,6 +169,57 @@ def _get_weather_type(mood_score: float) -> str:
         return 'sunny'
     else:
         return 'hot'
+
+
+@api_bp.route('/mood/danmaku', methods=['GET'])
+def list_mood_danmaku():
+    """
+    最近一段时间内的心情弹幕（默认 24 小时，与「我的」视图一致时可按 author_uid 筛选）
+    """
+    try:
+        hours = request.args.get('hours', 24, type=int)
+        hours = max(1, min(168, hours))
+        author_uid = request.args.get('author_uid', type=str)
+        author_uid = author_uid.strip() if author_uid else None
+        items = get_mood_danmaku_recent(hours=hours, author_uid=author_uid)
+        return success_response(items)
+    except Exception as e:
+        return error_response(f'获取心情弹幕失败: {str(e)}', 500)
+
+
+@api_bp.route('/mood/danmaku', methods=['POST'])
+def create_mood_danmaku():
+    """
+    发布一条心情弹幕：content、color（#RRGGBB）、emoji；可选 author_uid
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return error_response('请求体不能为空', 400)
+        content = (data.get('content') or '').strip()
+        if not content or len(content) > 120:
+            return error_response('心情内容不能为空且不超过 120 字', 400)
+        color = (data.get('color') or '#6366f1').strip()
+        if not _MOOD_COLOR_HEX.match(color):
+            return error_response('颜色须为 #RRGGBB 格式', 400)
+        emoji = (data.get('emoji') or '')[:16]
+        author_uid = data.get('author_uid')
+        if author_uid is not None:
+            author_uid = str(author_uid).strip() or None
+
+        if author_uid:
+            posted = count_mood_danmaku_by_author_recent(author_uid, 24)
+            if posted >= 3:
+                return error_response(
+                    '每人每 24 小时最多发布 3 条心情弹幕，请稍后再试',
+                    400,
+                )
+
+        if save_mood_danmaku(content, color, emoji, author_uid):
+            return success_response({'ok': True})
+        return error_response('保存失败', 500)
+    except Exception as e:
+        return error_response(f'发布心情弹幕失败: {str(e)}', 500)
 
 
 @api_bp.route('/mood/analyze', methods=['POST'])

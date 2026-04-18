@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Note, TrendPoint, MoodAnalysisResult, WeatherType, ExtensionMessage, ExtensionResponse } from '../types'
+import type {
+  Note,
+  TrendPoint,
+  MoodAnalysisResult,
+  WeatherType,
+  ExtensionMessage,
+  ExtensionResponse,
+  MoodDanmaku,
+} from '../types'
 import { api } from '../services/api'
 import { parseMowenUidFromCookie } from '../utils/mowenUid'
 
@@ -16,6 +24,8 @@ async function getMowenUid(cookie: string): Promise<string | null> {
 }
 import WeatherBackground from '../components/WeatherBackground'
 import MoodTrend from '../components/MoodTrend'
+import MoodDanmakuBar from '../components/MoodDanmakuBar'
+import MoodDanmakuModal from '../components/MoodDanmakuModal'
 import NoteList from '../components/NoteList'
 import ShareMood from '../components/ShareMood'
 
@@ -82,6 +92,10 @@ function App() {
   const [refreshingNotes, setRefreshingNotes] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [danmakuList, setDanmakuList] = useState<MoodDanmaku[]>([])
+  const [danmakuModalOpen, setDanmakuModalOpen] = useState(false)
+  const [danmakuSubmitting, setDanmakuSubmitting] = useState(false)
+  const [danmakuModalError, setDanmakuModalError] = useState<string | null>(null)
 
   /** 当前用户 uid：profile 接口优先，失败再解析 _MWT */
   const resolveAuthorUidForMine = useCallback(async (): Promise<string | null> => {
@@ -135,6 +149,7 @@ function App() {
           setLoading(false)
           setNotes([])
           setTrendData([])
+          setDanmakuList([])
           setHasMore(false)
           setCurrentWeather('cloudy')
         }
@@ -149,9 +164,10 @@ function App() {
     }
 
     try {
-      const [notesRes, trendRes] = await Promise.all([
+      const [notesRes, trendRes, dmRes] = await Promise.all([
         api.getNotes(10, 0, authorParam),
         api.getMoodTrend(authorParam),
+        api.getMoodDanmaku(24, authorParam),
       ])
 
       if (notesRes.success && notesRes.data) {
@@ -170,6 +186,12 @@ function App() {
         }
       } else {
         console.warn('获取趋势数据失败:', trendRes.message)
+      }
+
+      if (dmRes.success) {
+        setDanmakuList(dmRes.data || [])
+      } else {
+        console.warn('获取心情弹幕失败:', dmRes.message)
       }
     } catch (err) {
       if (silent) {
@@ -348,6 +370,38 @@ function App() {
     }
   }, [currentNoteUuid, loadData])
 
+  const handleDanmakuSubmit = useCallback(
+    async (payload: { content: string; color: string; emoji: string }) => {
+      let authorParam: string | undefined
+      if (viewScope === 'mine') {
+        const uid = myUid ?? (await resolveAuthorUidForMine())
+        if (uid) authorParam = uid
+      }
+      setDanmakuSubmitting(true)
+      setDanmakuModalError(null)
+      try {
+        const res = await api.postMoodDanmaku({
+          content: payload.content,
+          color: payload.color,
+          emoji: payload.emoji,
+          author_uid: authorParam ?? null,
+        })
+        if (res.success) {
+          setDanmakuModalOpen(false)
+          setDanmakuModalError(null)
+          await loadData({ silent: true })
+        } else {
+          setDanmakuModalError(res.message || '弹幕发送失败')
+        }
+      } catch {
+        setDanmakuModalError('弹幕发送失败')
+      } finally {
+        setDanmakuSubmitting(false)
+      }
+    },
+    [viewScope, myUid, resolveAuthorUidForMine, loadData]
+  )
+
   return (
     <div className="h-screen relative overflow-hidden flex flex-col">
       {/* 动态天气背景 */}
@@ -404,28 +458,52 @@ function App() {
                 </div>
               </div>
             ) : (
-              <MoodTrend 
-                data={trendData} 
-                onPointClick={(uuid) => {
-                  if (uuid) {
-                    // 打开笔记详情页
-                    const noteUrl = `https://note.mowen.cn/detail/${uuid}`
-                    window.open(noteUrl, '_blank')
-                  }
-                }}
-              />
+              <>
+                <MoodDanmakuBar data={danmakuList} />
+                <MoodTrend
+                  data={trendData}
+                  onPointClick={(uuid) => {
+                    if (uuid) {
+                      const noteUrl = `https://note.mowen.cn/detail/${uuid}`
+                      window.open(noteUrl, '_blank')
+                    }
+                  }}
+                />
+              </>
             )}
           </div>
         </section>
 
-        {/* 共享心情按钮区域 */}
-        <section className="flex-shrink-0 px-4">
-          <ShareMood
-            onAnalyze={handleAnalyze}
-            isDetailPage={isDetailPage}
-            isLoading={analysisLoading}
-            result={analysisResult}
-          />
+        {/* 心情弹幕（始终展示）+ 共享笔记心情（仅详情页） */}
+        <section className="flex-shrink-0 px-4 py-2">
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDanmakuModalOpen(true)
+                setDanmakuModalError(null)
+              }}
+              disabled={danmakuSubmitting}
+              className={`
+                w-full py-2.5 px-4 rounded-xl
+                font-medium text-sm
+                transition-all duration-300
+                ${
+                  danmakuSubmitting
+                    ? 'bg-gray-300 cursor-not-allowed text-gray-600'
+                    : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-[0.98] shadow-lg shadow-orange-500/30 text-white'
+                }
+              `}
+            >
+              {danmakuSubmitting ? '发送中…' : '心情弹幕'}
+            </button>
+            <ShareMood
+              onAnalyze={handleAnalyze}
+              isDetailPage={isDetailPage}
+              isLoading={analysisLoading}
+              result={analysisResult}
+            />
+          </div>
         </section>
 
         {/* 笔记列表区域 */}
@@ -464,6 +542,18 @@ function App() {
           </div>
         </section>
       </div>
+
+      <MoodDanmakuModal
+        open={danmakuModalOpen}
+        onClose={() => {
+          setDanmakuModalOpen(false)
+          setDanmakuModalError(null)
+        }}
+        submitting={danmakuSubmitting}
+        errorMessage={danmakuModalError}
+        onClearError={() => setDanmakuModalError(null)}
+        onSubmit={handleDanmakuSubmit}
+      />
     </div>
   )
 }

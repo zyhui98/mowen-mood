@@ -107,12 +107,8 @@ function MoodTrend({ data, onPointClick }: MoodTrendProps) {
       ctx.fillText(`${temp}°`, padding.left - 5, y + 3)
     }
 
-    // 如果没有数据，显示提示
     if (!data || data.length === 0) {
-      ctx.fillStyle = 'rgba(100, 100, 100, 0.6)'
-      ctx.font = '14px system-ui'
-      ctx.textAlign = 'center'
-      ctx.fillText('暂无心情数据', width / 2, height / 2)
+      pointsRef.current = []
       return
     }
 
@@ -273,7 +269,7 @@ function MoodTrend({ data, onPointClick }: MoodTrendProps) {
         </div>
       )}
       {(!data || data.length === 0) && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[1]">
           <p className="text-gray-500 text-sm">暂无心情趋势数据</p>
         </div>
       )}

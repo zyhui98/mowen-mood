@@ -1,12 +1,12 @@
 """
 墨问 API 客户端模块
-负责与墨问平台 API 对接，获取笔记列表和笔记详情
+负责与墨问平台 API 对接，获取笔记详情（单篇分析）
 """
 
 import re
 import time
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from html import unescape
 from datetime import datetime, timezone, timedelta
 
@@ -84,9 +84,6 @@ class MowenClient:
     """墨问 API 客户端"""
     
     BASE_URL = "https://note.mowen.cn/api/note/wxa/v1/note"
-    
-    # 默认的 strategy 参数（用于获取笔记列表）
-    DEFAULT_STRATEGY = "gqhzdHJhdGVneQGmcGFyYW1zgatwdWJlZF9hdF9sdKo0MDk4MTgyNDAw"
     
     # 请求配置
     REQUEST_TIMEOUT = 10  # 超时时间（秒）
@@ -250,35 +247,6 @@ class MowenClient:
         logger.error(f"请求失败，已达到最大重试次数: {last_exception}")
         raise MowenAPIError(f"请求失败，已重试 {self.MAX_RETRIES} 次: {last_exception}")
     
-    def fetch_notes(self, page: int = 1, size: int = 20) -> Dict[str, Any]:
-        """
-        获取笔记列表
-        
-        Args:
-            page: 页码，从 1 开始，默认 1
-            size: 每页数量，默认 20
-            
-        Returns:
-            Dict: 笔记列表响应数据
-            
-        Raises:
-            MowenAuthError: Cookie 失效
-            MowenAPIError: 其他 API 错误
-        """
-        url = f"{self.BASE_URL}/explore"
-        
-        payload = {
-            "strategy": self.DEFAULT_STRATEGY,
-            "paging": {
-                "page": page,
-                "size": size
-            }
-        }
-        
-        logger.info(f"获取笔记列表: page={page}, size={size}")
-        
-        return self._request_with_retry("POST", url, payload)
-    
     def fetch_note_detail(self, uuid: str) -> Dict[str, Any]:
         """
         获取单篇笔记详情
@@ -350,54 +318,6 @@ class MowenClient:
         text = text.strip()
         
         return text
-    
-    @staticmethod
-    def parse_notes_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        解析笔记列表响应，提取笔记数据
-        
-        Args:
-            response: fetch_notes 返回的原始响应
-            
-        Returns:
-            List[Dict]: 笔记列表，每个笔记包含 uuid, title 等字段
-        """
-        if not response:
-            return []
-        
-        # 尝试从常见的响应结构中提取数据
-        data = response.get('data', response)
-        
-        if isinstance(data, dict):
-            # 可能在 items, list 或 notes 字段中
-            notes = data.get('items', data.get('list', data.get('notes', [])))
-        elif isinstance(data, list):
-            notes = data
-        else:
-            notes = []
-        
-        # 如果笔记有 noteBase 字段，需要提取 noteBase 中的数据
-        parsed_notes = []
-        for note in notes:
-            if isinstance(note, dict):
-                # 如果有 noteBase 字段，提取 noteBase 中的数据
-                note_base = note.get('noteBase', {})
-                if note_base:
-                    parsed_notes.append({
-                        'uuid': note_base.get('uuid'),
-                        'uid': note_base.get('uid'),
-                        'title': note_base.get('title', ''),
-                        'digest': note_base.get('digest', ''),
-                        'content': note_base.get('content', ''),
-                        'createdAt': timestamp_to_iso(note_base.get('createdAt', '')),
-                        'publishedAt': timestamp_to_iso(note_base.get('publishedAt') or note_base.get('publicAt', ''))
-                    })
-                else:
-                    # 如果没有 noteBase 字段，直接使用 note
-                    parsed_notes.append(note)
-        
-        logger.info(f"获取到笔记数量: {len(parsed_notes)}")
-        return parsed_notes
     
     @staticmethod
     def parse_note_detail(response: Dict[str, Any]) -> Optional[Dict[str, Any]]:

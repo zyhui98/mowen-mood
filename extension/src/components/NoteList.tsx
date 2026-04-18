@@ -185,7 +185,7 @@ function NoteList({ notes, onLoadMore, loadingMore, hasMore }: NoteListProps) {
           </svg>
         </div>
         <p className="text-gray-500 text-sm">暂无笔记数据</p>
-        <p className="text-gray-400 text-xs mt-1">请先同步笔记</p>
+        <p className="text-gray-400 text-xs mt-1">在笔记详情页点击「共享心情」即可分析并展示</p>
       </div>
     )
   }

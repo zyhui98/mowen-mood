@@ -97,26 +97,6 @@ chrome.runtime.onMessage.addListener(
             break
           }
 
-          case 'SYNC_NOTES': {
-            // 获取 cookie 后调用后端 syncNotes API
-            const cookie = await getMowenCookie()
-            if (!cookie) {
-              sendResponse({
-                success: false,
-                error: '未找到墨问笔记登录信息，请先登录 note.mowen.cn',
-              })
-              break
-            }
-
-            const result = await api.syncNotes(cookie)
-            sendResponse({
-              success: result.success,
-              data: result.data,
-              error: result.message,
-            })
-            break
-          }
-
           case 'ANALYZE_NOTE': {
             // 获取 cookie 后调用后端 analyzeMood API
             const { uuid } = message.payload || {}

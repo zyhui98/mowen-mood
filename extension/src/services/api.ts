@@ -1,4 +1,4 @@
-import type { ApiResponse, Note, TrendPoint, MoodAnalysisResult } from '../types'
+import type { ApiResponse, Note, TrendPoint, MoodAnalysisResult, MoodDanmaku } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE
 
@@ -50,16 +50,6 @@ export const api = {
   },
 
   /**
-   * 同步笔记（传入 cookie）
-   */
-  syncNotes(cookie: string): Promise<ApiResponse<{ total: number; synced: number; skipped: number }>> {
-    return request<{ total: number; synced: number; skipped: number }>('/notes/sync', {
-      method: 'POST',
-      body: JSON.stringify({ cookie }),
-    })
-  },
-
-  /**
    * 获取笔记列表（支持分页）
    * @param authorUid 传入则只拉取该作者的笔记（「我的」）
    */
@@ -81,6 +71,32 @@ export const api = {
       path += `?author_uid=${encodeURIComponent(authorUid)}`
     }
     return request<TrendPoint[]>(path)
+  },
+
+  /**
+   * 最近一段时间内的心情弹幕（默认 24 小时）
+   */
+  getMoodDanmaku(hours: number = 24, authorUid?: string): Promise<ApiResponse<MoodDanmaku[]>> {
+    let path = `/mood/danmaku?hours=${hours}`
+    if (authorUid) {
+      path += `&author_uid=${encodeURIComponent(authorUid)}`
+    }
+    return request<MoodDanmaku[]>(path)
+  },
+
+  /**
+   * 发布心情弹幕
+   */
+  postMoodDanmaku(payload: {
+    content: string
+    color: string
+    emoji: string
+    author_uid?: string | null
+  }): Promise<ApiResponse<{ ok: boolean }>> {
+    return request<{ ok: boolean }>('/mood/danmaku', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
   },
 
   /**
