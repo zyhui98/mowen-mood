@@ -77,6 +77,25 @@ def init_db() -> None:
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_mood_records_note_uuid ON mood_records(note_uuid)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_mood_records_created_at ON mood_records(created_at)')
+
+    # 每个 note_uuid 仅保留一条 mood_records；去重后再建唯一索引
+    try:
+        cursor.execute(
+            '''
+            DELETE FROM mood_records
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM mood_records GROUP BY note_uuid
+            )
+            '''
+        )
+        cursor.execute(
+            '''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mood_records_unique_note_uuid
+            ON mood_records(note_uuid)
+            '''
+        )
+    except sqlite3.OperationalError as e:
+        print(f"mood_records 唯一索引迁移警告: {e}")
     
     # 数据库迁移：添加新字段（如果不存在）
     try:
@@ -91,8 +110,19 @@ def init_db() -> None:
         if 'reason' not in columns:
             cursor.execute('ALTER TABLE notes ADD COLUMN reason TEXT')
             print("数据库迁移: 添加 reason 字段")
+
+        if 'author_uid' not in columns:
+            cursor.execute('ALTER TABLE notes ADD COLUMN author_uid TEXT')
+            print("数据库迁移: 添加 author_uid 字段")
     except Exception as e:
         print(f"数据库迁移警告: {e}")
+
+    try:
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_notes_author_uid ON notes(author_uid)'
+        )
+    except sqlite3.OperationalError as e:
+        print(f"notes author_uid 索引警告: {e}")
     
     conn.commit()
     conn.close()
@@ -138,8 +168,8 @@ def save_note(note_data: Dict[str, Any]) -> bool:
             update_fields = []
             update_values = []
             
-            for field in ['title', 'content', 'summary', 'mood_score', 
-                          'weather_type', 'mood_label', 'reason', 'analyzed_at', 'published_at']:
+            for field in ['title', 'content', 'summary', 'mood_score',
+                          'weather_type', 'mood_label', 'reason', 'analyzed_at', 'published_at', 'author_uid']:
                 if field in note_data:
                     update_fields.append(f'{field} = ?')
                     update_values.append(note_data[field])
@@ -154,8 +184,8 @@ def save_note(note_data: Dict[str, Any]) -> bool:
             values = [note_data['uuid']]
             placeholders = ['?']
             
-            for field in ['title', 'content', 'summary', 'mood_score', 
-                          'weather_type', 'mood_label', 'reason', 'analyzed_at', 'published_at']:
+            for field in ['title', 'content', 'summary', 'mood_score',
+                          'weather_type', 'mood_label', 'reason', 'analyzed_at', 'published_at', 'author_uid']:
                 if field in note_data:
                     fields.append(field)
                     values.append(note_data[field])
@@ -181,7 +211,7 @@ def save_note(note_data: Dict[str, Any]) -> bool:
         conn.close()
 
 
-def get_notes(limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
+def get_notes(limit: int = 20, offset: int = 0, author_uid: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     获取笔记列表
     按创建时间倒序排列
@@ -189,6 +219,7 @@ def get_notes(limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     Args:
         limit: 返回的最大记录数，默认 20
         offset: 跳过的记录数，默认 0
+        author_uid: 若不为空则只返回该作者的笔记（「我的」）
         
     Returns:
         List[Dict]: 笔记列表
@@ -197,13 +228,23 @@ def get_notes(limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-            SELECT id, uuid, title, content, summary, mood_score, 
-                   weather_type, mood_label, reason, analyzed_at, published_at, created_at
-            FROM notes
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        ''', (limit, offset))
+        if author_uid:
+            cursor.execute('''
+                SELECT id, uuid, title, content, summary, mood_score,
+                       weather_type, mood_label, reason, analyzed_at, published_at, created_at, author_uid
+                FROM notes
+                WHERE author_uid = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+            ''', (author_uid, limit, offset))
+        else:
+            cursor.execute('''
+                SELECT id, uuid, title, content, summary, mood_score,
+                       weather_type, mood_label, reason, analyzed_at, published_at, created_at, author_uid
+                FROM notes
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
         
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
@@ -212,18 +253,21 @@ def get_notes(limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def get_notes_count() -> int:
+def get_notes_count(author_uid: Optional[str] = None) -> int:
     """
     获取笔记总数
     
-    Returns:
-        int: 笔记总数
+    Args:
+        author_uid: 若不为空则只统计该作者的笔记
     """
     conn = get_db()
     cursor = conn.cursor()
     
     try:
-        cursor.execute('SELECT COUNT(*) FROM notes')
+        if author_uid:
+            cursor.execute('SELECT COUNT(*) FROM notes WHERE author_uid = ?', (author_uid,))
+        else:
+            cursor.execute('SELECT COUNT(*) FROM notes')
         count = cursor.fetchone()[0]
         return count
         
@@ -231,30 +275,40 @@ def get_notes_count() -> int:
         conn.close()
 
 
-def get_mood_trend(days: int = 30) -> List[Dict[str, Any]]:
+def get_mood_trend(days: int = 30, author_uid: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     获取心情趋势数据
     返回指定天数内的心情记录，按时间排序
     
     Args:
         days: 查询的天数范围，默认 30 天
-        
-    Returns:
-        List[Dict]: 心情趋势数据
+        author_uid: 若不为空则只包含该作者笔记的心情记录（「我的」）
     """
     conn = get_db()
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-            SELECT mr.id, mr.note_uuid, mr.mood_score, mr.mood_label, 
-                   mr.analysis_reason, mr.created_at,
-                   n.title as note_title
-            FROM mood_records mr
-            LEFT JOIN notes n ON mr.note_uuid = n.uuid
-            WHERE mr.created_at >= datetime('now', ?)
-            ORDER BY mr.created_at ASC
-        ''', (f'-{days} days',))
+        if author_uid:
+            cursor.execute('''
+                SELECT mr.id, mr.note_uuid, mr.mood_score, mr.mood_label,
+                       mr.analysis_reason, mr.created_at,
+                       n.title as note_title
+                FROM mood_records mr
+                LEFT JOIN notes n ON mr.note_uuid = n.uuid
+                WHERE mr.created_at >= datetime('now', ?)
+                  AND n.author_uid = ?
+                ORDER BY mr.created_at ASC
+            ''', (f'-{days} days', author_uid))
+        else:
+            cursor.execute('''
+                SELECT mr.id, mr.note_uuid, mr.mood_score, mr.mood_label,
+                       mr.analysis_reason, mr.created_at,
+                       n.title as note_title
+                FROM mood_records mr
+                LEFT JOIN notes n ON mr.note_uuid = n.uuid
+                WHERE mr.created_at >= datetime('now', ?)
+                ORDER BY mr.created_at ASC
+            ''', (f'-{days} days',))
         
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
@@ -265,7 +319,7 @@ def get_mood_trend(days: int = 30) -> List[Dict[str, Any]]:
 
 def save_mood_record(record: Dict[str, Any]) -> bool:
     """
-    保存心情记录
+    保存心情记录（同一 note_uuid 仅一行：存在则更新）
     
     Args:
         record: 心情记录字典，必须包含 'note_uuid' 和 'mood_score' 字段
@@ -282,19 +336,38 @@ def save_mood_record(record: Dict[str, Any]) -> bool:
     cursor = conn.cursor()
     
     try:
-        fields = ['note_uuid', 'mood_score']
-        values = [record['note_uuid'], record['mood_score']]
-        placeholders = ['?', '?']
-        
-        for field in ['mood_label', 'analysis_reason', 'created_at']:
-            if field in record:
-                fields.append(field)
-                values.append(record[field])
-                placeholders.append('?')
-        
-        sql = f"INSERT INTO mood_records ({', '.join(fields)}) VALUES ({', '.join(placeholders)})"
-        cursor.execute(sql, values)
-        
+        note_uuid = record['note_uuid']
+        mood_score = record['mood_score']
+        mood_label = record.get('mood_label')
+        analysis_reason = record.get('analysis_reason')
+        created_at = record.get('created_at')
+
+        if created_at is not None:
+            cursor.execute(
+                '''
+                INSERT INTO mood_records (note_uuid, mood_score, mood_label, analysis_reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(note_uuid) DO UPDATE SET
+                    mood_score = excluded.mood_score,
+                    mood_label = excluded.mood_label,
+                    analysis_reason = excluded.analysis_reason,
+                    created_at = excluded.created_at
+                ''',
+                (note_uuid, mood_score, mood_label, analysis_reason, created_at),
+            )
+        else:
+            cursor.execute(
+                '''
+                INSERT INTO mood_records (note_uuid, mood_score, mood_label, analysis_reason)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(note_uuid) DO UPDATE SET
+                    mood_score = excluded.mood_score,
+                    mood_label = excluded.mood_label,
+                    analysis_reason = excluded.analysis_reason
+                ''',
+                (note_uuid, mood_score, mood_label, analysis_reason),
+            )
+
         conn.commit()
         return True
         
@@ -322,8 +395,8 @@ def get_note_by_uuid(uuid: str) -> Optional[Dict[str, Any]]:
     
     try:
         cursor.execute('''
-            SELECT id, uuid, title, content, summary, mood_score, 
-                   weather_type, mood_label, reason, analyzed_at, published_at, created_at
+            SELECT id, uuid, title, content, summary, mood_score,
+                   weather_type, mood_label, reason, analyzed_at, published_at, created_at, author_uid
             FROM notes
             WHERE uuid = ?
         ''', (uuid,))

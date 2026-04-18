@@ -1,10 +1,25 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Note, TrendPoint, MoodAnalysisResult, WeatherType, ExtensionMessage, ExtensionResponse } from '../types'
 import { api } from '../services/api'
+import { parseMowenUidFromCookie } from '../utils/mowenUid'
+
+/** 优先请求 user.mowen.cn profile，失败则解析 Cookie 中 JWT */
+async function getMowenUid(cookie: string): Promise<string | null> {
+  if (!cookie.trim()) return null
+  if (isChromeExtension()) {
+    const res = await sendMessage({ type: 'FETCH_MOWEN_UID', payload: { cookie } })
+    if (res.success && res.data?.uid) {
+      return res.data.uid as string
+    }
+  }
+  return parseMowenUidFromCookie(cookie)
+}
 import WeatherBackground from '../components/WeatherBackground'
 import MoodTrend from '../components/MoodTrend'
 import NoteList from '../components/NoteList'
 import ShareMood from '../components/ShareMood'
+
+type ViewScope = 'mowen' | 'mine'
 
 // 根据最新温度计算当前天气类型
 function getWeatherType(moodScore: number | null): WeatherType {
@@ -40,11 +55,21 @@ async function sendMessage(message: ExtensionMessage): Promise<ExtensionResponse
   })
 }
 
+async function fetchMowenCookie(): Promise<string> {
+  if (!isChromeExtension()) return ''
+  const res = await sendMessage({ type: 'GET_COOKIE' })
+  if (res.success && res.data?.cookie) return res.data.cookie as string
+  return ''
+}
+
 /**
  * 主应用组件
  */
 function App() {
   // 状态管理
+  const [viewScope, setViewScope] = useState<ViewScope>('mine')
+  const [myUid, setMyUid] = useState<string | null>(null)
+  const [myUidLoading, setMyUidLoading] = useState(() => isChromeExtension())
   const [notes, setNotes] = useState<Note[]>([])
   const [trendData, setTrendData] = useState<TrendPoint[]>([])
   const [loading, setLoading] = useState(true)
@@ -54,21 +79,79 @@ function App() {
   const [currentNoteUuid, setCurrentNoteUuid] = useState<string | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisResult, setAnalysisResult] = useState<MoodAnalysisResult | null>(null)
-  const [syncing, setSyncing] = useState(false)
   const [refreshingNotes, setRefreshingNotes] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
 
-  // 加载数据
-  const loadData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+  /** 当前用户 uid：profile 接口优先，失败再解析 _MWT */
+  const resolveAuthorUidForMine = useCallback(async (): Promise<string | null> => {
+    if (myUid) return myUid
+    const cookie = await fetchMowenCookie()
+    if (!cookie) return null
+    const uid = await getMowenUid(cookie)
+    if (uid) setMyUid(uid)
+    return uid
+  }, [myUid])
+
+  // 解析当前用户 id（预加载，便于切换「我的」时已有 uid）
+  useEffect(() => {
+    if (!isChromeExtension()) {
+      setMyUidLoading(false)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const cookie = await fetchMowenCookie()
+      if (cancelled) return
+      if (!cookie) {
+        setMyUidLoading(false)
+        return
+      }
+      const uid = await getMowenUid(cookie)
+      if (!cancelled && uid) {
+        setMyUid(uid)
+      }
+      if (!cancelled) setMyUidLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 加载数据（笔记 + 心情趋势图）；silent 用于定时刷新，不整页 loading、不弹错误条
+  const loadData = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true
+
+    let authorParam: string | undefined
+    if (viewScope === 'mine') {
+      if (myUidLoading && !myUid) {
+        if (!silent) setLoading(true)
+        return
+      }
+      const uid =
+        myUid ?? (await resolveAuthorUidForMine())
+      if (!uid) {
+        if (!silent) {
+          setLoading(false)
+          setNotes([])
+          setTrendData([])
+          setHasMore(false)
+          setCurrentWeather('cloudy')
+        }
+        return
+      }
+      authorParam = uid
+    }
+
+    if (!silent) {
+      setLoading(true)
+      setError(null)
+    }
 
     try {
-      // 并行获取笔记和趋势数据
       const [notesRes, trendRes] = await Promise.all([
-        api.getNotes(10, 0),
-        api.getMoodTrend(),
+        api.getNotes(10, 0, authorParam),
+        api.getMoodTrend(authorParam),
       ])
 
       if (notesRes.success && notesRes.data) {
@@ -89,18 +172,31 @@ function App() {
         console.warn('获取趋势数据失败:', trendRes.message)
       }
     } catch (err) {
-      setError('加载数据失败，请检查后端服务是否运行')
-      console.error('加载数据失败:', err)
+      if (silent) {
+        console.error('定时刷新失败:', err)
+      } else {
+        setError('加载数据失败，请检查后端服务是否运行')
+        console.error('加载数据失败:', err)
+      }
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
-  }, [])
+  }, [viewScope, myUid, myUidLoading, resolveAuthorUidForMine])
 
   // 仅刷新笔记列表（重新从第一页加载）
   const refreshNotes = useCallback(async () => {
+    if (viewScope === 'mine' && myUidLoading && !myUid) return
+    let authorParam: string | undefined
+    if (viewScope === 'mine') {
+      const uid = myUid ?? (await resolveAuthorUidForMine())
+      if (!uid) return
+      authorParam = uid
+    }
     setRefreshingNotes(true)
     try {
-      const notesRes = await api.getNotes(10, 0)
+      const notesRes = await api.getNotes(10, 0, authorParam)
       if (notesRes.success && notesRes.data) {
         setNotes(notesRes.data.notes || [])
         setHasMore(notesRes.data.hasMore || false)
@@ -110,16 +206,24 @@ function App() {
     } finally {
       setRefreshingNotes(false)
     }
-  }, [])
+  }, [viewScope, myUid, myUidLoading, resolveAuthorUidForMine])
 
   // 加载更多笔记
   const loadMoreNotes = useCallback(async () => {
     if (loadingMore || !hasMore) return
-    
+    if (viewScope === 'mine' && myUidLoading && !myUid) return
+
+    let authorParam: string | undefined
+    if (viewScope === 'mine') {
+      const uid = myUid ?? (await resolveAuthorUidForMine())
+      if (!uid) return
+      authorParam = uid
+    }
+
     setLoadingMore(true)
     try {
       const offset = notes.length
-      const notesRes = await api.getNotes(10, offset)
+      const notesRes = await api.getNotes(10, offset, authorParam)
       if (notesRes.success && notesRes.data) {
         setNotes(prev => [...prev, ...(notesRes.data.notes || [])])
         setHasMore(notesRes.data.hasMore || false)
@@ -129,7 +233,7 @@ function App() {
     } finally {
       setLoadingMore(false)
     }
-  }, [notes.length, hasMore, loadingMore])
+  }, [notes.length, hasMore, loadingMore, viewScope, myUid, myUidLoading, resolveAuthorUidForMine])
 
   // 检测当前页面是否是笔记详情页
   const checkCurrentPage = useCallback(async () => {
@@ -175,11 +279,14 @@ function App() {
     }
   }, [currentNoteUuid])
 
-  // 初始化
+  // 拉取列表与趋势（勿与 checkCurrentPage 同 effect，避免切换浏览器 tab 重复请求）
   useEffect(() => {
     loadData()
+  }, [loadData])
+
+  useEffect(() => {
     checkCurrentPage()
-  }, [loadData, checkCurrentPage])
+  }, [checkCurrentPage])
 
   // 监听 tab 切换事件，重新检测当前页面
   useEffect(() => {
@@ -200,14 +307,14 @@ function App() {
     }
   }, [checkCurrentPage])
 
-  // 自动刷新笔记列表（每1分钟）
+  // 每 1 分钟自动刷新笔记列表 + 心情趋势图
   useEffect(() => {
     const interval = setInterval(() => {
-      refreshNotes()
-    }, 60000) // 1分钟 = 60000毫秒
+      loadData({ silent: true })
+    }, 60000)
 
     return () => clearInterval(interval)
-  }, [refreshNotes])
+  }, [loadData])
 
   // 共享心情处理
   const handleAnalyze = useCallback(async () => {
@@ -241,28 +348,6 @@ function App() {
     }
   }, [currentNoteUuid, loadData])
 
-  // 同步笔记处理
-  const handleSync = useCallback(async () => {
-    setSyncing(true)
-    setError(null)
-
-    try {
-      const response = await sendMessage({ type: 'SYNC_NOTES' })
-
-      if (response.success) {
-        // 刷新数据
-        await loadData()
-      } else {
-        setError(response.error || '同步失败')
-      }
-    } catch (err) {
-      setError('同步请求失败')
-      console.error('同步失败:', err)
-    } finally {
-      setSyncing(false)
-    }
-  }, [loadData])
-
   return (
     <div className="h-screen relative overflow-hidden flex flex-col">
       {/* 动态天气背景 */}
@@ -270,30 +355,32 @@ function App() {
 
       {/* 内容层 */}
       <div className="relative z-10 flex flex-col h-full">
-        {/* 顶部标题栏 */}
-        <header className="flex-shrink-0 px-4 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-800 drop-shadow-sm">
-            墨问心情
-          </h1>
-          {/* 同步按钮 */}
-          <button
-            onClick={handleSync}
-            disabled={syncing || loading}
-            className={`
-              p-2 rounded-full transition-all duration-200
-              ${syncing || loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/20 active:scale-95'}
-            `}
-            title="同步笔记"
-          >
-            <svg 
-              className={`w-5 h-5 text-gray-700 ${syncing ? 'animate-spin' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
+        {/* 顶部：我的 / 墨问 切换 */}
+        <header className="flex-shrink-0 px-4 py-3 flex items-center">
+          <div className="flex rounded-lg bg-gray-200/90 p-0.5 shadow-inner">
+            <button
+              type="button"
+              onClick={() => setViewScope('mine')}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                viewScope === 'mine'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
+              我的
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewScope('mowen')}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                viewScope === 'mowen'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-800'
+              }`}
+            >
+              墨问
+            </button>
+          </div>
         </header>
 
         {/* 错误提示 */}

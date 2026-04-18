@@ -66,6 +66,20 @@ class MowenServerError(MowenAPIError):
     pass
 
 
+class MowenNotePrivacyError(MowenAPIError):
+    """笔记为私有，接口不允许拉取详情（需公开后方可分析）"""
+    pass
+
+
+def _raise_if_note_privacy_reason(payload: Dict[str, Any]) -> None:
+    """墨问返回笔记隐私相关 reason 时抛出友好错误。"""
+    reason = (payload.get('reason') or '').strip()
+    if reason == 'PRIVACY_NOTE_SHOW_DISALLOW':
+        raise MowenNotePrivacyError('私有笔记需公开后才可以分析心情')
+    if reason == 'NOTE_IS_PRIVATE':
+        raise MowenNotePrivacyError('需公开、分享、转发后才可以分析心情')
+
+
 class MowenClient:
     """墨问 API 客户端"""
     
@@ -165,7 +179,17 @@ class MowenClient:
                 # 处理其他 HTTP 错误
                 if response.status_code >= 400:
                     logger.error(f"请求失败: HTTP {response.status_code}, 响应: {response.text[:500]}")
-                    raise MowenAPIError(f"请求失败: HTTP {response.status_code}")
+                    err_msg = f"请求失败: HTTP {response.status_code}"
+                    try:
+                        err_data = response.json()
+                        _raise_if_note_privacy_reason(err_data)
+                        if err_data.get('message'):
+                            err_msg = err_data.get('message', err_msg)
+                    except MowenNotePrivacyError:
+                        raise
+                    except Exception:
+                        pass
+                    raise MowenAPIError(err_msg)
                 
                 # 解析响应
                 data = response.json()
@@ -177,6 +201,7 @@ class MowenClient:
                 if isinstance(data, dict):
                     code = data.get('code')
                     if code is not None and code != 0:
+                        _raise_if_note_privacy_reason(data)
                         error_msg = data.get('msg', data.get('message', '未知错误'))
                         # code 为特定值时可能表示认证问题
                         if code in [401, 403, -1001, -1002]:
@@ -189,7 +214,10 @@ class MowenClient:
             except MowenAuthError:
                 # 认证错误不重试，直接抛出
                 raise
-                
+
+            except MowenNotePrivacyError:
+                raise
+
             except (Timeout, ConnectionError) as e:
                 last_exception = e
                 logger.warning(f"网络错误 (尝试 {attempt}/{self.MAX_RETRIES}): {e}")
@@ -410,10 +438,15 @@ class MowenClient:
                 if note_base:
                     return {
                         'uuid': note_base.get('uuid'),
+                        'uid': note_base.get('uid'),
                         'title': note_base.get('title'),
-                        'content': note_base.get('digest', ''),
+                        'content': note_base.get('content') or note_base.get('digest', ''),
+                        'digest': note_base.get('digest', ''),
                         'publishedAt': timestamp_to_iso(
-                            note_base.get('publishedAt') or note_base.get('published_at') or note_base.get('createdAt', '')
+                            note_base.get('publishedAt')
+                            or note_base.get('publicAt')
+                            or note_base.get('published_at')
+                            or note_base.get('createdAt', '')
                         )
                     }
             

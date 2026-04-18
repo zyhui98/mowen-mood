@@ -61,16 +61,26 @@ export const api = {
 
   /**
    * 获取笔记列表（支持分页）
+   * @param authorUid 传入则只拉取该作者的笔记（「我的」）
    */
-  getNotes(limit: number = 10, offset: number = 0): Promise<ApiResponse<{notes: Note[], total: number, hasMore: boolean}>> {
-    return request<{notes: Note[], total: number, hasMore: boolean}>(`/notes?limit=${limit}&offset=${offset}`)
+  getNotes(limit: number = 10, offset: number = 0, authorUid?: string): Promise<ApiResponse<{notes: Note[], total: number, hasMore: boolean}>> {
+    let path = `/notes?limit=${limit}&offset=${offset}`
+    if (authorUid) {
+      path += `&author_uid=${encodeURIComponent(authorUid)}`
+    }
+    return request<{notes: Note[], total: number, hasMore: boolean}>(path)
   },
 
   /**
    * 获取心情趋势
+   * @param authorUid 传入则只统计该作者的笔记心情（「我的」）
    */
-  getMoodTrend(): Promise<ApiResponse<TrendPoint[]>> {
-    return request<TrendPoint[]>('/mood/trend')
+  getMoodTrend(authorUid?: string): Promise<ApiResponse<TrendPoint[]>> {
+    let path = '/mood/trend'
+    if (authorUid) {
+      path += `?author_uid=${encodeURIComponent(authorUid)}`
+    }
+    return request<TrendPoint[]>(path)
   },
 
   /**

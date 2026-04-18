@@ -1,18 +1,25 @@
 import type { ExtensionMessage, ExtensionResponse } from '../types'
 import { api } from '../services/api'
+import { extractUidFromProfileJson, MOWEN_PROFILE_URL } from '../utils/mowenUid'
 
 // 设置点击扩展图标时自动打开侧边栏
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error('设置侧边栏行为失败:', error))
 
 /**
- * 从 mowen.cn 域提取 Cookie
+ * 合并 note / user 子域 Cookie（profile 接口需带上登录态）
  */
 async function getMowenCookie(): Promise<string> {
   try {
-    const cookies = await chrome.cookies.getAll({ domain: 'note.mowen.cn' })
-    // 将所有 cookie 拼接为 "name=value; name2=value2" 格式字符串
-    return cookies.map((cookie: chrome.cookies.Cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+    const [noteCookies, userCookies] = await Promise.all([
+      chrome.cookies.getAll({ domain: 'note.mowen.cn' }),
+      chrome.cookies.getAll({ domain: 'user.mowen.cn' }),
+    ])
+    const byName = new Map<string, string>()
+    for (const c of [...noteCookies, ...userCookies]) {
+      byName.set(c.name, c.value)
+    }
+    return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
   } catch (error) {
     console.error('获取 Cookie 失败:', error)
     return ''
@@ -35,6 +42,58 @@ chrome.runtime.onMessage.addListener(
               success: true,
               data: { cookie },
             })
+            break
+          }
+
+          case 'FETCH_MOWEN_UID': {
+            const cookie = (message.payload as { cookie?: string } | undefined)?.cookie?.trim()
+            if (!cookie) {
+              sendResponse({ success: false, error: '缺少 cookie' })
+              break
+            }
+            const res = await fetch(MOWEN_PROFILE_URL, {
+              method: 'GET',
+              headers: {
+                accept: 'application/json, text/plain, */*',
+                'accept-language': 'zh-CN,zh;q=0.9',
+                'content-type': 'application/json',
+                origin: 'https://note.mowen.cn',
+                referer: 'https://note.mowen.cn/',
+                'user-agent':
+                  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+                'x-mo-ver-wxa': '1.69.3',
+                Cookie: cookie,
+              },
+            })
+            const text = await res.text()
+            let data: unknown
+            try {
+              data = JSON.parse(text)
+            } catch {
+              sendResponse({
+                success: false,
+                error: `profile 响应非 JSON (HTTP ${res.status})`,
+              })
+              break
+            }
+            if (!res.ok) {
+              sendResponse({
+                success: false,
+                error: `profile HTTP ${res.status}`,
+                data: { raw: data },
+              })
+              break
+            }
+            const uid = extractUidFromProfileJson(data)
+            if (uid) {
+              sendResponse({ success: true, data: { uid } })
+            } else {
+              sendResponse({
+                success: false,
+                error: 'profile 响应中未找到 uid',
+                data: { raw: data },
+              })
+            }
             break
           }
 

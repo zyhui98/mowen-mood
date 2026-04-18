@@ -10,7 +10,7 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 from config import get_config
-from database import save_note, save_mood_record
+from database import save_note, save_mood_record, get_note_by_uuid
 
 
 # 上海时区 (UTC+8)
@@ -340,8 +340,9 @@ class MoodAnalyzer:
             return "hot"
         return "storm"
     
-    def analyze_and_save(self, note_uuid: str, title: str, content: str, 
-                         published_at: Optional[str] = None) -> dict:
+    def analyze_and_save(self, note_uuid: str, title: str, content: str,
+                         published_at: Optional[str] = None,
+                         author_uid: Optional[str] = None) -> dict:
         """
         分析笔记心情并保存到数据库
         
@@ -362,6 +363,25 @@ class MoodAnalyzer:
                 "saved": bool
             }
         """
+        existing = get_note_by_uuid(note_uuid)
+        if existing and existing.get('mood_score') is not None:
+            ms = existing['mood_score']
+            weather = existing.get('weather_type') or self.get_weather_type(float(ms))
+            logger.info(
+                '笔记已在库中，跳过 LLM 与写库: uuid=%s mood_score=%s',
+                note_uuid,
+                ms,
+            )
+            return {
+                'success': True,
+                'is_mood_related': True,
+                'mood_score': float(ms),
+                'mood_label': existing.get('mood_label') or '平静',
+                'weather_type': weather,
+                'reason': existing.get('reason') or '',
+                'saved': False,
+            }
+
         logger.info(f"开始分析笔记: uuid={note_uuid}, title={title[:30] if title else '无标题'}...")
         
         # 组合标题和内容进行分析
@@ -396,7 +416,9 @@ class MoodAnalyzer:
                 }
                 if published_at:
                     note_data['published_at'] = published_at
-                
+                if author_uid:
+                    note_data['author_uid'] = author_uid
+
                 note_saved = save_note(note_data)
                 
                 # 保存心情记录
@@ -411,7 +433,19 @@ class MoodAnalyzer:
                 result['saved'] = note_saved and record_saved
                 
                 if result['saved']:
-                    logger.info(f"笔记心情记录已保存: uuid={note_uuid}")
+                    note_snapshot = {}
+                    for k, v in note_data.items():
+                        if k == 'content' and isinstance(v, str) and len(v) > 160:
+                            note_snapshot[k] = v[:160] + '…'
+                        else:
+                            note_snapshot[k] = v
+                    logger.info(
+                        '笔记心情记录已保存 | notes 表: uuid=%s author_uid=%s 字段=%s | mood_records 表: %s',
+                        note_uuid,
+                        note_data.get('author_uid'),
+                        json.dumps(note_snapshot, ensure_ascii=False, default=str),
+                        json.dumps(mood_record, ensure_ascii=False, default=str),
+                    )
                 else:
                     logger.warning(f"笔记心情记录保存部分失败: note={note_saved}, record={record_saved}")
                     
@@ -443,8 +477,9 @@ def get_analyzer() -> MoodAnalyzer:
 
 
 # 便捷函数
-def analyze_note(note_uuid: str, title: str, content: str, 
-                 published_at: Optional[str] = None) -> dict:
+def analyze_note(note_uuid: str, title: str, content: str,
+                 published_at: Optional[str] = None,
+                 author_uid: Optional[str] = None) -> dict:
     """
     分析笔记心情的便捷函数
     
@@ -458,4 +493,4 @@ def analyze_note(note_uuid: str, title: str, content: str,
         dict: 分析结果
     """
     analyzer = get_analyzer()
-    return analyzer.analyze_and_save(note_uuid, title, content, published_at)
+    return analyzer.analyze_and_save(note_uuid, title, content, published_at, author_uid)

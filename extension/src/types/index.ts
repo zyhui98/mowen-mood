@@ -18,6 +18,8 @@ export interface Note {
   analyzed_at: string | null
   published_at: string | null
   created_at: string
+  /** 墨问作者 uid，用于「我的」筛选 */
+  author_uid?: string | null
 }
 
 // 心情记录
@@ -57,7 +59,7 @@ export interface ApiResponse<T> {
 
 // 插件消息类型（用于 background 和 popup 之间通信）
 export interface ExtensionMessage {
-  type: 'GET_COOKIE' | 'GET_CURRENT_NOTE' | 'ANALYZE_NOTE' | 'SYNC_NOTES'
+  type: 'GET_COOKIE' | 'GET_CURRENT_NOTE' | 'ANALYZE_NOTE' | 'SYNC_NOTES' | 'FETCH_MOWEN_UID'
   payload?: any
 }
 

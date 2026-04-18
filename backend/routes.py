@@ -7,8 +7,13 @@ REST API 路由模块
 from flask import Blueprint, request, jsonify
 
 from config import config
-from database import get_notes, get_mood_trend, get_note_by_uuid
-from mowen_client import MowenClient, MowenAuthError, MowenAPIError
+from database import get_notes, get_mood_trend, get_note_by_uuid, get_notes_count
+from mowen_client import (
+    MowenClient,
+    MowenAuthError,
+    MowenAPIError,
+    MowenNotePrivacyError,
+)
 from mood_analyzer import get_analyzer
 
 
@@ -96,11 +101,14 @@ def sync_notes():
             if not note_uuid:
                 continue
             
-            # 检查数据库中是否已存在该 uuid 的记录
+            # 已在库中则不再拉详情、不调 LLM、不写库
             existing = get_note_by_uuid(note_uuid)
-            if existing and existing.get('mood_score') is not None:
+            if existing:
                 skipped += 1
-                print(f"[跳过] 笔记已分析过: uuid={note_uuid}, mood_score={existing.get('mood_score')}")
+                print(
+                    f"[跳过] 笔记已在库中: uuid={note_uuid}, "
+                    f"mood_score={existing.get('mood_score')}"
+                )
                 continue
             
             try:
@@ -117,12 +125,15 @@ def sync_notes():
                 content = MowenClient.extract_text_content(content_html)
                 published_at = detail.get('publishedAt', detail.get('published_at'))
                 
+                author_uid = detail.get('uid') if detail else None
+
                 # 分析心情并保存
                 result = analyzer.analyze_and_save(
                     note_uuid=note_uuid,
                     title=title,
                     content=content,
-                    published_at=published_at
+                    published_at=published_at,
+                    author_uid=author_uid
                 )
                 
                 if result.get('success'):
@@ -159,33 +170,35 @@ def get_notes_list():
     """
     获取已分析的笔记列表（带温度值）
     
-    查询参数: 
+    查询参数:
       - limit (默认 10)
       - offset (默认 0)
+      - author_uid (可选) 传入则只返回该作者的笔记（「我的」）
     响应: {"success": true, "data": {"notes": [笔记列表], "total": 总数, "hasMore": 是否有更多}}
     """
     try:
         # 获取查询参数
         limit = request.args.get('limit', 10, type=int)
         offset = request.args.get('offset', 0, type=int)
-        
+        author_uid = request.args.get('author_uid', type=str)
+        author_uid = author_uid.strip() if author_uid else None
+
         # 限制 limit 范围
         limit = max(1, min(100, limit))
-        
+
         # 获取笔记列表
-        notes = get_notes(limit, offset)
-        
+        notes = get_notes(limit, offset, author_uid=author_uid)
+
         # 获取总数（用于判断是否有更多）
-        from database import get_notes_count
-        total = get_notes_count()
+        total = get_notes_count(author_uid=author_uid)
         has_more = offset + limit < total
-        
+
         return success_response({
             'notes': notes,
             'total': total,
             'hasMore': has_more
         })
-        
+
     except Exception as e:
         return error_response(f'获取笔记列表失败: {str(e)}', 500)
 
@@ -195,6 +208,10 @@ def get_mood_trend_data():
     """
     获取心情趋势数据
     
+    查询参数:
+      - days (可选)
+      - author_uid (可选) 传入则只统计该作者的笔记心情（「我的」）
+        
     响应: {"success": true, "data": [趋势数据点列表]}
     每个数据点包含: date, mood_score, weather_type, note_title
     """
@@ -202,9 +219,11 @@ def get_mood_trend_data():
         # 获取查询参数（可选）
         days = request.args.get('days', 30, type=int)
         days = max(1, min(365, days))
-        
+        author_uid = request.args.get('author_uid', type=str)
+        author_uid = author_uid.strip() if author_uid else None
+
         # 获取趋势数据
-        trend_data = get_mood_trend(days)
+        trend_data = get_mood_trend(days, author_uid=author_uid)
         
         # 格式化数据，确保包含所需字段
         formatted_data = []
@@ -271,6 +290,17 @@ def analyze_single_note():
         if not uuid:
             return error_response('缺少 uuid 参数', 400)
         
+        existing = get_note_by_uuid(uuid)
+        if existing and existing.get('mood_score') is not None:
+            return success_response({
+                'is_mood_related': True,
+                'mood_score': existing.get('mood_score'),
+                'mood_label': existing.get('mood_label') or '',
+                'weather_type': existing.get('weather_type')
+                or _get_weather_type(existing.get('mood_score', 15)),
+                'reason': existing.get('reason') or '',
+            })
+
         # 创建墨问客户端获取笔记详情
         client = MowenClient(cookie)
         
@@ -289,13 +319,16 @@ def analyze_single_note():
         content = MowenClient.extract_text_content(content_html)
         published_at = detail.get('publishedAt', detail.get('published_at'))
         
+        author_uid = detail.get('uid') if detail else None
+
         # 获取分析器并分析心情
         analyzer = get_analyzer()
         result = analyzer.analyze_and_save(
             note_uuid=uuid,
             title=title,
             content=content,
-            published_at=published_at
+            published_at=published_at,
+            author_uid=author_uid
         )
         
         # 构建响应数据
@@ -311,6 +344,8 @@ def analyze_single_note():
         
     except MowenAuthError as e:
         return error_response(str(e), 401)
+    except MowenNotePrivacyError as e:
+        return error_response(str(e), 400)
     except MowenAPIError as e:
         return error_response(str(e), 500)
     except ValueError as e:
